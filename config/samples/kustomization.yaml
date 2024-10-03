@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- resourcetrees_v1_compositionreferences.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,9 @@
+resources:
+- manager.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: controller
+  newName: krateo-finops-registry.westeurope.cloudapp.azure.com/composition-watcher
+  newTag: 0.1.0
+
