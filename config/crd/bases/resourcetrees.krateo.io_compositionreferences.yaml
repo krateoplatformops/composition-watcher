@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: compositionreferences.finops.krateo.io
+  name: compositionreferences.resourcetrees.krateo.io
 spec:
-  group: finops.krateo.io
+  group: resourcetrees.krateo.io
   names:
     kind: CompositionReference
     listKind: CompositionReferenceList
@@ -44,11 +44,12 @@ spec:
                       properties:
                         apiVersion:
                           type: string
+                        name:
+                          type: string
                         resource:
                           type: string
                       required:
                       - apiVersion
-                      - resource
                       type: object
                     type: array
                 required:

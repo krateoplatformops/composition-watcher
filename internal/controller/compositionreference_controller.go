@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,19 +30,16 @@ import (
 
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
 	httpHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/http"
+	informerHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/informer"
 	clientHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/kube/client"
 	statusGetter "github.com/krateoplatformops/composition-watcher/internal/helpers/kube/compositions"
-	informerHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/watcher"
 )
-
-func init() {
-	informerHelper.InitWatcher()
-}
 
 // CompositionReferenceReconciler reconciles a CompositionRference object
 type CompositionReferenceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	CompositionInformer *informerHelper.CompositionInformer
 }
 
 //+kubebuilder:rbac:groups=*,resources=*,verbs=get;list;watch
@@ -57,7 +53,12 @@ func (r *CompositionReferenceReconciler) Reconcile(ctx context.Context, req ctrl
 
 	err = r.Get(ctx, req.NamespacedName, &compositionReference)
 	if err != nil {
-		return ctrl.Result{Requeue: false}, fmt.Errorf("unable to retrieve CompositionReference: %w", err)
+		if client.IgnoreNotFound(err) != nil {
+			logger.Error(err, "unable to retrieve CompositionReference")
+			return ctrl.Result{}, err
+		}
+		logger.Info("CompositionReference not found, ignoring since object must be deleted...")
+		return ctrl.Result{}, nil
 	}
 
 	cfg, err := rest.InClusterConfig()
@@ -86,24 +87,18 @@ func (r *CompositionReferenceReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	uid := obj.GetUID()
-	if !informerHelper.DoesWatcherAlreadyExist(uid) {
-		informerHelper.StartWatcher(gvr, compositionReference.Spec.Reference.Namespace, uid, cfg)
+	if !r.CompositionInformer.DoesInformerAlreadyExist(uid) {
+		r.CompositionInformer.StartCompositionInformer(compositionReference, uid, cfg)
 	}
 
-	updatedData, err := statusGetter.GetCompositionResourcesStatus(dynClient, obj, compositionReference.Spec.Reference)
+	updatedData, err := statusGetter.GetCompositionResourcesStatus(dynClient, obj, compositionReference.Spec.Reference, compositionReference.Spec.Filters.Exclude, logger)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("error retrieving updated status information for resources of composition uid %s: %w", uid, err)
 	}
 
-	host := os.Getenv("RESOURCE_TREE_WEB_SERVICE_HOST")
-	port := os.Getenv("RESOURCE_TREE_WEB_SERVICE_PORT")
-	if host == "" || port == "" {
-		return ctrl.Result{Requeue: false}, fmt.Errorf("no target webservice found")
-	}
-
-	err = httpHelper.Post(fmt.Sprintf("%s:%s/resourcetree/%s", host, port, uid), updatedData)
+	err = httpHelper.Request("POST", fmt.Sprintf("/compositions/%s", uid), updatedData)
 	if err != nil {
-		return ctrl.Result{Requeue: true}, fmt.Errorf("error while sending data to webservice: %w", err)
+		return ctrl.Result{}, fmt.Errorf("error with requested http resource: %w", err)
 	}
 
 	logger.Info("End of reconcile")

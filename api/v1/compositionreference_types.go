@@ -58,7 +58,10 @@ type Filters struct {
 
 type Exclude struct {
 	ApiVersion string `json:"apiVersion"`
-	Resource   string `json:"resource"`
+	// +optional
+	Resource string `json:"resource"`
+	// +optional
+	Name string `json:"name"`
 }
 
 type Reference struct {

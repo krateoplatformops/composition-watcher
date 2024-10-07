@@ -27,7 +27,7 @@ import (
 	"github.com/krateoplatformops/composition-watcher/test/utils"
 )
 
-const namespace = "finops"
+const namespace = "resourcetrees"
 
 var _ = Describe("controller", Ordered, func() {
 	BeforeAll(func() {
