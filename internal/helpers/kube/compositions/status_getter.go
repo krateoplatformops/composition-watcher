@@ -10,27 +10,62 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/go-logr/logr"
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstructured.Unstructured, compositionReference watcher.Reference) ([]byte, error) {
-	resourceList, found, _ := unstructured.NestedSlice(obj.Object, "managed")
+func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstructured.Unstructured, compositionReference watcher.Reference, excludes []watcher.Exclude, logger logr.Logger) ([]byte, error) {
+	status, found, err := unstructured.NestedMap(obj.Object, "status")
+	if err != nil {
+		return nil, fmt.Errorf("error accessing 'status' field: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("could not find 'status' field in composition object")
+	}
+
+	managed, found := status["managed"]
+	if !found {
+		return nil, fmt.Errorf("could not find 'managed' field in composition object")
+	}
+
 	var managedResourceList []watcher.Reference
-	if found {
-		for _, item := range resourceList {
-			managedResourceList = append(managedResourceList, item.(watcher.Reference))
+
+	// Check if managed is a slice
+	managedSlice, ok := managed.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("'managed' field is not a slice as expected")
+	}
+
+	for _, m := range managedSlice {
+		if mMap, ok := m.(map[string]interface{}); ok {
+			ref := watcher.Reference{
+				ApiVersion: mMap["apiVersion"].(string),
+				Resource:   mMap["resource"].(string),
+				Name:       mMap["name"].(string),
+				Namespace:  mMap["namespace"].(string),
+			}
+			managedResourceList = append(managedResourceList, ref)
 		}
-	} else {
-		return []byte{}, fmt.Errorf("could not find 'managed' field in composition object")
 	}
 
 	var result []Resource
 	for _, managedResource := range managedResourceList {
+		skip := false
+		for _, exclude := range excludes {
+			if shouldItSkip(exclude, managedResource) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
 		gv, err := schema.ParseGroupVersion(managedResource.ApiVersion)
 		if err != nil {
-			return []byte{}, fmt.Errorf("could not parse Group/Version of managed resource: %w", err)
+			return nil, fmt.Errorf("could not parse Group/Version of managed resource: %w", err)
 		}
+
 		gvr := schema.GroupVersionResource{
 			Group:    gv.Group,
 			Version:  gv.Version,
@@ -39,7 +74,13 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 
 		unstructuredRes, err := dynClient.Resource(gvr).Namespace(managedResource.Namespace).Get(context.TODO(), managedResource.Name, v1.GetOptions{})
 		if err != nil {
-			return []byte{}, fmt.Errorf("error fetching resource status: %w", err)
+			logger.V(1).Info("error fetching resource status, trying with cluster-scoped", "error", err, "group", gvr.Group, "version", gvr.Version, "resource", gvr.Resource, "name", managedResource.Name, "namespace", managedResource.Namespace)
+			unstructuredRes, err = dynClient.Resource(gvr).Get(context.TODO(), managedResource.Name, v1.GetOptions{})
+			if err != nil {
+				logger.Error(err, "error fetching resource status", "group", gvr.Group, "version", gvr.Version, "resource", gvr.Resource, "name", managedResource.Name, "namespace", "")
+				continue
+			}
+
 		}
 
 		var status Status
@@ -90,7 +131,7 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 	if err != nil {
 		return []byte{}, fmt.Errorf("error marshaling composition resources status: %w", err)
 	}
-	fmt.Println("json result:", string(jsonData))
+	logger.V(1).Info("webservice response", "json", string(jsonData))
 	return jsonData, nil
 }
 

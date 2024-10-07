@@ -102,10 +102,5 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
-        env:
-          - name: WATCH_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

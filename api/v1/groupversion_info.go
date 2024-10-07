@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1 contains API Schema definitions for the finops v1 API group
+// Package v1 contains API Schema definitions for the resourcetrees v1 API group
 // +kubebuilder:object:generate=true
-// +groupName=finops.krateo.io
+// +groupName=resourcetrees.krateo.io
 package v1
 
 import (
