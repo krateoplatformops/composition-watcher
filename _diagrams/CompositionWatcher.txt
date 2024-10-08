@@ -1,0 +1,43 @@
+@startuml
+allowmixing
+
+title Composition Watcher and Resource Tree Handler
+
+object ResourceTreeHandler {
+  GET; POST; DELETE
+  /composition/<composition_id>
+}
+
+
+
+object CompositionReference {
+  ApiVersion
+  Resource
+  Name
+  Namespace
+}
+object Composition {
+  ...
+}
+
+package "Composition Watcher" {
+  component CompositionReferenceController
+  component CompositionInformer
+  object HttpHelper {
+    SendRequest
+  }
+}
+
+object Cache {
+  ETCD
+}
+
+CompositionReferenceController <- CompositionReference
+CompositionReference -> Composition
+
+
+CompositionReferenceController --> CompositionInformer : "create\nfor composition"
+CompositionInformer -> HttpHelper : "call on event"
+HttpHelper -> ResourceTreeHandler : "POST; DELETE"
+
+ResourceTreeHandler -> Cache : "store"

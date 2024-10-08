@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,7 @@ type CompositionReferenceReconciler struct {
 	client.Client
 	Scheme              *runtime.Scheme
 	CompositionInformer *informerHelper.CompositionInformer
+	RequeueAfter        time.Duration
 }
 
 //+kubebuilder:rbac:groups=*,resources=*,verbs=get;list;watch
@@ -102,8 +104,11 @@ func (r *CompositionReferenceReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	logger.Info("End of reconcile")
-
-	return ctrl.Result{}, nil
+	if r.RequeueAfter != time.Duration(0) {
+		return ctrl.Result{RequeueAfter: r.RequeueAfter}, nil
+	} else {
+		return ctrl.Result{}, nil
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
