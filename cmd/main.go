@@ -20,6 +20,8 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strconv"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -127,11 +129,20 @@ func main() {
 
 	compositionInformer := informerHelper.CompositionInformer{}
 	compositionInformer.InitCompositionInformer()
+	requeueAfterString := os.Getenv("RECONCILE_REQUEUE_AFTER")
+	requeueAfterInt, err := strconv.Atoi(requeueAfterString)
+	requeueAfter := time.Duration(time.Duration(0))
+	if err != nil {
+		setupLog.Error(err, "unable to parse RECONCILE_REQUEUE_AFTER, using default value")
+	} else if requeueAfterInt != 0 {
+		requeueAfter = time.Duration(requeueAfterInt) * time.Second
+	}
 
 	if err = (&controller.CompositionReferenceReconciler{
 		Client:              mgr.GetClient(),
 		Scheme:              mgr.GetScheme(),
 		CompositionInformer: &compositionInformer,
+		RequeueAfter:        requeueAfter,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CompositionReference")
 		os.Exit(1)
