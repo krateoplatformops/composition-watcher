@@ -12,3 +12,23 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - resourcetrees.krateo.io
+  resources:
+  - compositionreferences
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - resourcetrees.krateo.io
+  resources:
+  - compositionreferences/status
+  verbs:
+  - get
+  - patch
+  - update

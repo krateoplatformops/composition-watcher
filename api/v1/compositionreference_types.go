@@ -18,6 +18,7 @@ limitations under the License.
 package v1
 
 import (
+	prv1 "github.com/krateoplatformops/provider-runtime/apis/common/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -38,6 +39,7 @@ type CompositionReferenceSpec struct {
 }
 
 type CompositionReferenceStatus struct {
+	prv1.ConditionedStatus `json:",inline"`
 }
 
 //+kubebuilder:object:root=true
@@ -50,6 +52,14 @@ type CompositionReferenceList struct {
 
 func init() {
 	SchemeBuilder.Register(&CompositionReference{}, &CompositionReferenceList{})
+}
+
+func (mg *CompositionReference) GetCondition(ct prv1.ConditionType) prv1.Condition {
+	return mg.Status.GetCondition(ct)
+}
+
+func (mg *CompositionReference) SetConditions(c ...prv1.Condition) {
+	mg.Status.SetConditions(c...)
 }
 
 type Filters struct {
