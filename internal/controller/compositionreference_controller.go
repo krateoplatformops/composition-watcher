@@ -52,13 +52,16 @@ const (
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences/status,verbs=get;update;patch
 
-func Setup(mgr ctrl.Manager, o controller.Options, inf *informerHelper.CompositionInformer) error {
+func Setup(mgr ctrl.Manager, o controller.Options) error {
 	name := reconciler.ControllerName(watcher.CompositionReferenceGroupKind)
 
 	log := o.Logger.WithValues("controller", name)
 	log.Info("controller", "name", name)
 
 	recorder := mgr.GetEventRecorderFor(name)
+
+	inf := &informerHelper.CompositionInformer{}
+	inf.InitCompositionInformer(log)
 
 	r := reconciler.NewReconciler(mgr,
 		resource.ManagedKind(watcher.CompositionReferenceGroupVersionKind),
@@ -70,6 +73,8 @@ func Setup(mgr ctrl.Manager, o controller.Options, inf *informerHelper.Compositi
 		reconciler.WithPollInterval(o.PollInterval),
 		reconciler.WithLogger(log),
 		reconciler.WithRecorder(event.NewAPIRecorder(recorder)))
+
+	log.Debug("polling rate", "rate", o.PollInterval)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
@@ -122,6 +127,13 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 		return reconciler.ExternalObservation{}, errors.New(errNotCompositionReference)
 	}
 
+	// if meta.WasDeleted(cr) {
+	// 	return reconciler.ExternalObservation{
+	// 		ResourceExists:   true,
+	// 		ResourceUpToDate: true,
+	// 	}, nil
+	// }
+
 	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
 	if err != nil {
 		return reconciler.ExternalObservation{}, fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
@@ -139,7 +151,9 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 
 	uid := obj.GetUID()
 	if !e.compositionInformer.DoesInformerAlreadyExist(uid) {
-		e.compositionInformer.StartCompositionInformer(*cr, uid, e.cfg)
+		return reconciler.ExternalObservation{
+			ResourceExists: false,
+		}, nil
 	}
 
 	updatedData, err := statusGetter.GetCompositionResourcesStatus(e.dynClient, obj, cr.Spec.Reference, cr.Spec.Filters.Exclude, e.log)
@@ -162,7 +176,29 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 }
 
 func (e *external) Create(ctx context.Context, mg resource.Managed) error {
-	return nil // NOOP
+	cr, ok := mg.(*watcher.CompositionReference)
+	if !ok {
+		return errors.New(errNotCompositionReference)
+	}
+
+	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	if err != nil {
+		return fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
+	}
+	gvr := schema.GroupVersionResource{
+		Group:    gv.Group,
+		Version:  gv.Version,
+		Resource: cr.Spec.Reference.Resource,
+	}
+	// Get structure to send to webservice
+	obj, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("unable to retrieve composition object: %w", err)
+	}
+
+	uid := obj.GetUID()
+
+	return e.compositionInformer.StartCompositionInformer(*cr, uid, e.cfg)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) error {
@@ -200,7 +236,7 @@ func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
 	}
 
 	if !e.compositionInformer.DeleteInformer(deletedUID) {
-		e.log.Info("Could not delete informer for composotion uid: %s", deletedUID)
+		e.log.Info("Could not delete informer for composotion", "uid", deletedUID)
 	}
 
 	e.log.Debug("Deleted cache on webservice", "delete UID", deletedUID)

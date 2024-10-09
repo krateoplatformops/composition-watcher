@@ -39,7 +39,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
-	informerHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/informer"
 
 	compositionReferenceController "github.com/krateoplatformops/composition-watcher/internal/controller"
 	"github.com/krateoplatformops/provider-runtime/pkg/controller"
@@ -131,25 +130,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	log := logging.NewLogrLogger(log.Log.WithName("composition-watcher"))
-	compositionInformer := informerHelper.CompositionInformer{}
-	compositionInformer.InitCompositionInformer(log)
-
 	pollingIntervalString := os.Getenv("POLLING_INTERVAL")
 	maxReconcileRateString := os.Getenv("MAX_RECONCILE_RATE")
 
-	PollingIntervalInt, err := strconv.Atoi(pollingIntervalString)
+	pollingIntervalInt, err := strconv.Atoi(pollingIntervalString)
 	pollingInterval := time.Duration(time.Duration(0))
 
 	if err != nil {
 		setupLog.Error(err, "unable to parse POLLING_INTERVAL, using default value")
-	} else if PollingIntervalInt != 0 {
-		pollingInterval = time.Duration(PollingIntervalInt) * time.Second
+	} else if pollingIntervalInt != 0 {
+		pollingInterval = time.Duration(pollingIntervalInt) * time.Second
 	}
 
 	maxReconcileRate, err := strconv.Atoi(maxReconcileRateString)
 	if err != nil {
-		setupLog.Error(err, "unable to parse MAX_RECONCILE_RATE, using default value (5)")
+		setupLog.Error(err, "unable to parse MAX_RECONCILE_RATE, using default value (1)")
 		maxReconcileRate = 5
 	}
 
@@ -165,13 +160,13 @@ func main() {
 	}*/
 
 	o := controller.Options{
-		Logger:                  log,
+		Logger:                  logging.NewLogrLogger(log.Log.WithName("composition-watcher")),
 		MaxConcurrentReconciles: maxReconcileRate,
 		PollInterval:            pollingInterval,
 		GlobalRateLimiter:       ratelimiter.NewGlobal(maxReconcileRate),
 	}
 
-	if err := compositionReferenceController.Setup(mgr, o, &compositionInformer); err != nil {
+	if err := compositionReferenceController.Setup(mgr, o); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CompositionReference")
 		os.Exit(1)
 	}
