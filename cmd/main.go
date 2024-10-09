@@ -144,7 +144,7 @@ func main() {
 
 	maxReconcileRate, err := strconv.Atoi(maxReconcileRateString)
 	if err != nil {
-		setupLog.Error(err, "unable to parse MAX_RECONCILE_RATE, using default value (1)")
+		setupLog.Error(err, "unable to parse MAX_RECONCILE_RATE, using default value (5)")
 		maxReconcileRate = 5
 	}
 
