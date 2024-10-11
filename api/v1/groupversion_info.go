@@ -20,6 +20,8 @@ limitations under the License.
 package v1
 
 import (
+	"reflect"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/scheme"
 )
@@ -33,4 +35,9 @@ var (
 
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
+
+	CompositionReferenceKind             = reflect.TypeOf(CompositionReference{}).Name()
+	CompositionReferenceGroupKind        = schema.GroupKind{Group: GroupVersion.Group, Kind: CompositionReferenceKind}.String()
+	CompositionReferenceKindAPIVersion   = CompositionReferenceKind + "." + GroupVersion.String()
+	CompositionReferenceGroupVersionKind = GroupVersion.WithKind(CompositionReferenceKind)
 )

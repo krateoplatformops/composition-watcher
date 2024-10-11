@@ -33,14 +33,17 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
-	informerHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/informer"
 
-	"github.com/krateoplatformops/composition-watcher/internal/controller"
+	compositionReferenceController "github.com/krateoplatformops/composition-watcher/internal/controller"
+	"github.com/krateoplatformops/provider-runtime/pkg/controller"
+	"github.com/krateoplatformops/provider-runtime/pkg/logging"
+	"github.com/krateoplatformops/provider-runtime/pkg/ratelimiter"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -127,18 +130,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	compositionInformer := informerHelper.CompositionInformer{}
-	compositionInformer.InitCompositionInformer()
-	requeueAfterString := os.Getenv("RECONCILE_REQUEUE_AFTER")
-	requeueAfterInt, err := strconv.Atoi(requeueAfterString)
-	requeueAfter := time.Duration(time.Duration(0))
+	pollingIntervalString := os.Getenv("POLLING_INTERVAL")
+	maxReconcileRateString := os.Getenv("MAX_RECONCILE_RATE")
+
+	pollingIntervalInt, err := strconv.Atoi(pollingIntervalString)
+	pollingInterval := time.Duration(time.Duration(0))
+
 	if err != nil {
-		setupLog.Error(err, "unable to parse RECONCILE_REQUEUE_AFTER, using default value")
-	} else if requeueAfterInt != 0 {
-		requeueAfter = time.Duration(requeueAfterInt) * time.Second
+		setupLog.Error(err, "unable to parse POLLING_INTERVAL, using default value")
+	} else if pollingIntervalInt != 0 {
+		pollingInterval = time.Duration(pollingIntervalInt) * time.Second
 	}
 
-	if err = (&controller.CompositionReferenceReconciler{
+	maxReconcileRate, err := strconv.Atoi(maxReconcileRateString)
+	if err != nil {
+		setupLog.Error(err, "unable to parse MAX_RECONCILE_RATE, using default value (5)")
+		maxReconcileRate = 5
+	}
+
+	// Old reconciler
+	/*if err = (&controller.CompositionReferenceReconciler{
 		Client:              mgr.GetClient(),
 		Scheme:              mgr.GetScheme(),
 		CompositionInformer: &compositionInformer,
@@ -146,9 +157,19 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CompositionReference")
 		os.Exit(1)
+	}*/
+
+	o := controller.Options{
+		Logger:                  logging.NewLogrLogger(log.Log.WithName("composition-watcher")),
+		MaxConcurrentReconciles: maxReconcileRate,
+		PollInterval:            pollingInterval,
+		GlobalRateLimiter:       ratelimiter.NewGlobal(maxReconcileRate),
 	}
 
-	informerHelper.StartCompositionReferenceInformer()
+	if err := compositionReferenceController.Setup(mgr, o); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CompositionReference")
+		os.Exit(1)
+	}
 
 	//+kubebuilder:scaffold:builder
 

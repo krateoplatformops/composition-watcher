@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/go-logr/logr"
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
 	httpHelper "github.com/krateoplatformops/composition-watcher/internal/helpers/http"
 	statusGetter "github.com/krateoplatformops/composition-watcher/internal/helpers/kube/compositions"
+	"github.com/krateoplatformops/provider-runtime/pkg/logging"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,20 +15,19 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type CompositionInformer struct {
 	informerList map[types.UID]*cache.SharedIndexInformer
 	stopChans    map[types.UID]chan struct{}
 	mu           sync.Mutex
-	logger       logr.Logger
+	logger       logging.Logger
 }
 
-func (r *CompositionInformer) InitCompositionInformer() {
+func (r *CompositionInformer) InitCompositionInformer(log logging.Logger) {
 	r.informerList = make(map[types.UID]*cache.SharedIndexInformer)
 	r.stopChans = make(map[types.UID]chan struct{})
-	r.logger = log.Log.WithValues("CompositionInformer", "cluster-wide")
+	r.logger = log
 }
 
 func (r *CompositionInformer) StartCompositionInformer(compositionReference watcher.CompositionReference, uid types.UID, config *rest.Config) error {
@@ -79,7 +78,7 @@ func (r *CompositionInformer) StartCompositionInformer(compositionReference watc
 
 				err = httpHelper.Request("DELETE", fmt.Sprintf("/compositions/%s", deletedUID), nil)
 				if err != nil {
-					r.logger.Error(err, "error with requested http resource")
+					r.logger.Info(fmt.Sprintf("error with requested http resource: %s", err))
 				}
 				r.logger.Info("Deleted cache on webservice", "delete UID", deletedUID)
 
@@ -96,12 +95,12 @@ func (r *CompositionInformer) StartCompositionInformer(compositionReference watc
 
 			updatedData, err := statusGetter.GetCompositionResourcesStatus(dynClient, item, compositionReference.Spec.Reference, compositionReference.Spec.Filters.Exclude, r.logger)
 			if err != nil {
-				r.logger.Error(err, fmt.Sprintf("error retrieving updated status information for resources of composition uid: %s", updatedUID))
+				r.logger.Info(fmt.Sprintf("error retrieving updated status information for resources of composition uid %s: %s", updatedUID, err))
 			}
 
 			err = httpHelper.Request("POST", fmt.Sprintf("/compositions/%s", updatedUID), updatedData)
 			if err != nil {
-				r.logger.Error(err, "error with requested http resource")
+				r.logger.Info(fmt.Sprintf("error with requested http resource: %s", err))
 			}
 
 		},
@@ -114,4 +113,14 @@ func (r *CompositionInformer) StartCompositionInformer(compositionReference watc
 func (r *CompositionInformer) DoesInformerAlreadyExist(uid types.UID) bool {
 	_, ok := r.informerList[uid]
 	return ok
+}
+
+func (r *CompositionInformer) DeleteInformer(uid types.UID) bool {
+	if r.DoesInformerAlreadyExist(uid) {
+		delete(r.informerList, uid)
+		close(r.stopChans[uid])
+		delete(r.stopChans, uid)
+		return true
+	}
+	return false
 }
