@@ -7,18 +7,17 @@ import (
 	"os"
 )
 
-func Request(method string, url string, data []byte) error {
-	host := os.Getenv("RESOURCE_TREE_HANDLER_SERVICE_HOST")
-	port := os.Getenv("RESOURCE_TREE_HANDLER_SERVICE_PORT")
-	if host == "" || port == "" {
+func Request(method string, path string, data []byte) error {
+	serviceUrl := os.Getenv("RESOURCE_TREE_HANDLER_URL")
+	if serviceUrl == "" {
 		return fmt.Errorf("no target webservice found")
 	}
 
 	switch method {
 	case "POST":
-		return post(fmt.Sprintf("http://%s:%s%s", host, port, url), data)
+		return post(fmt.Sprintf("%s%s", serviceUrl, path), data)
 	case "DELETE":
-		return delete(fmt.Sprintf("http://%s:%s%s", host, port, url))
+		return delete(fmt.Sprintf("%s%s", serviceUrl, path))
 	default:
 		return fmt.Errorf("method not allowed")
 	}
