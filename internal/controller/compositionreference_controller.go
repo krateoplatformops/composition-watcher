@@ -20,11 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/krateoplatformops/provider-runtime/pkg/controller"
 	"github.com/krateoplatformops/provider-runtime/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -48,6 +50,10 @@ const (
 	errNotCompositionReference = "managed resource is not a composition reference custom resource"
 )
 
+var (
+	sinceLastUpdate = make(map[string]time.Time)
+)
+
 //+kubebuilder:rbac:groups=*,resources=*,verbs=get;list;watch
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences/status,verbs=get;update;patch
@@ -69,6 +75,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 			compositionInformer: inf,
 			log:                 log,
 			recorder:            recorder,
+			pollInterval:        o.PollInterval,
 		}),
 		reconciler.WithPollInterval(o.PollInterval),
 		reconciler.WithLogger(log),
@@ -85,6 +92,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 
 type connector struct {
 	compositionInformer *informerHelper.CompositionInformer
+	pollInterval        time.Duration
 	log                 logging.Logger
 	recorder            record.EventRecorder
 }
@@ -104,6 +112,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (reconcile
 		cfg:                 cfg,
 		dynClient:           dynClient,
 		compositionInformer: c.compositionInformer,
+		pollInterval:        c.pollInterval,
 		log:                 c.log,
 		rec:                 c.recorder,
 	}, nil
@@ -113,6 +122,7 @@ type external struct {
 	cfg                 *rest.Config
 	compositionInformer *informerHelper.CompositionInformer
 	dynClient           *dynamic.DynamicClient
+	pollInterval        time.Duration
 	log                 logging.Logger
 	rec                 record.EventRecorder
 }
@@ -127,19 +137,9 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 		return reconciler.ExternalObservation{}, errors.New(errNotCompositionReference)
 	}
 
-	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	obj, err := e.getObj(ctx, cr)
 	if err != nil {
-		return reconciler.ExternalObservation{}, fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
-	}
-	gvr := schema.GroupVersionResource{
-		Group:    gv.Group,
-		Version:  gv.Version,
-		Resource: cr.Spec.Reference.Resource,
-	}
-	// Get structure to send to webservice
-	obj, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
-	if err != nil {
-		return reconciler.ExternalObservation{}, fmt.Errorf("unable to retrieve composition object: %w", err)
+		return reconciler.ExternalObservation{}, err
 	}
 
 	uid := obj.GetUID()
@@ -150,10 +150,25 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 		}, nil
 	}
 
+	timeSinceLastUpdate, ok := sinceLastUpdate[cr.Name+cr.Namespace]
+	if !ok {
+		return reconciler.ExternalObservation{
+			ResourceExists:   true,
+			ResourceUpToDate: false,
+		}, nil
+	} else {
+		if time.Since(timeSinceLastUpdate) > e.pollInterval {
+			return reconciler.ExternalObservation{
+				ResourceExists:   true,
+				ResourceUpToDate: false,
+			}, nil
+		}
+	}
 	return reconciler.ExternalObservation{
 		ResourceExists:   true,
-		ResourceUpToDate: false,
+		ResourceUpToDate: true,
 	}, nil
+
 }
 
 func (e *external) Create(ctx context.Context, mg resource.Managed) error {
@@ -162,19 +177,9 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) error {
 		return errors.New(errNotCompositionReference)
 	}
 
-	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	obj, err := e.getObj(ctx, cr)
 	if err != nil {
-		return fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
-	}
-	gvr := schema.GroupVersionResource{
-		Group:    gv.Group,
-		Version:  gv.Version,
-		Resource: cr.Spec.Reference.Resource,
-	}
-	// Get structure to send to webservice
-	obj, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("unable to retrieve composition object: %w", err)
+		return err
 	}
 
 	uid := obj.GetUID()
@@ -194,19 +199,9 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) error {
 		return errors.New(errNotCompositionReference)
 	}
 
-	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	obj, err := e.getObj(ctx, cr)
 	if err != nil {
-		return fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
-	}
-	gvr := schema.GroupVersionResource{
-		Group:    gv.Group,
-		Version:  gv.Version,
-		Resource: cr.Spec.Reference.Resource,
-	}
-	// Get structure to send to webservice
-	obj, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("unable to retrieve composition object: %w", err)
+		return err
 	}
 
 	uid := obj.GetUID()
@@ -223,7 +218,7 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) error {
 
 	cr.SetConditions(prv1.Available())
 	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed updated", "UID '%s'", uid)
-
+	sinceLastUpdate[cr.Name+cr.Namespace] = time.Now()
 	return nil
 }
 
@@ -261,8 +256,24 @@ func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
 		e.log.Info("Could not delete informer for composotion", "uid", deletedUID)
 	}
 
+	delete(sinceLastUpdate, cr.Name+cr.Namespace)
+
 	e.log.Debug("Deleted cache on webservice", "delete UID", deletedUID)
 	e.rec.Eventf(cr, corev1.EventTypeNormal, "Deleted from cache", "UID '%s'", deletedUID)
 
 	return nil
+}
+
+func (e *external) getObj(ctx context.Context, cr *watcher.CompositionReference) (*unstructured.Unstructured, error) {
+	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
+	}
+	gvr := schema.GroupVersionResource{
+		Group:    gv.Group,
+		Version:  gv.Version,
+		Resource: cr.Spec.Reference.Resource,
+	}
+	// Get structure to send to webservice
+	return e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
 }
