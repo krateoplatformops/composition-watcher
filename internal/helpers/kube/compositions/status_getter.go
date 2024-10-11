@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -12,10 +11,16 @@ import (
 
 	"github.com/go-logr/logr"
 	watcher "github.com/krateoplatformops/composition-watcher/api/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstructured.Unstructured, compositionReference watcher.Reference, excludes []watcher.Exclude, logger logr.Logger) ([]byte, error) {
+	resourceTreeJson := ResourceTreeJson{}
+	resourceTreeJson.CreationTimestamp = metav1.Now()
+
+	resourceTreeJson.Spec.Tree = make([]ResourceNode, 0)
+	resourceTreeJson.Status = make([]*ResourceNodeStatus, 0)
+
 	status, found, err := unstructured.NestedMap(obj.Object, "status")
 	if err != nil {
 		return nil, fmt.Errorf("error accessing 'status' field: %w", err)
@@ -49,7 +54,6 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 		}
 	}
 
-	var result []Resource
 	for _, managedResource := range managedResourceList {
 		skip := false
 		for _, exclude := range excludes {
@@ -72,59 +76,70 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 			Resource: managedResource.Resource,
 		}
 
-		unstructuredRes, err := dynClient.Resource(gvr).Namespace(managedResource.Namespace).Get(context.TODO(), managedResource.Name, v1.GetOptions{})
+		unstructuredRes, err := dynClient.Resource(gvr).Namespace(managedResource.Namespace).Get(context.TODO(), managedResource.Name, metav1.GetOptions{})
 		if err != nil {
 			logger.V(1).Info("error fetching resource status, trying with cluster-scoped", "error", err, "group", gvr.Group, "version", gvr.Version, "resource", gvr.Resource, "name", managedResource.Name, "namespace", managedResource.Namespace)
-			unstructuredRes, err = dynClient.Resource(gvr).Get(context.TODO(), managedResource.Name, v1.GetOptions{})
+			unstructuredRes, err = dynClient.Resource(gvr).Get(context.TODO(), managedResource.Name, metav1.GetOptions{})
 			if err != nil {
-				logger.Error(err, "error fetching resource status", "group", gvr.Group, "version", gvr.Version, "resource", gvr.Resource, "name", managedResource.Name, "namespace", "")
+				logger.Info(fmt.Sprintf("error fetching resource status: %s", err), "group", gvr.Group, "version", gvr.Version, "resource", gvr.Resource, "name", managedResource.Name, "namespace", "")
 				continue
 			}
 
 		}
 
-		var status Status
-
-		// Extract metadata
-		status.ResourceVersion = unstructuredRes.GetResourceVersion()
-		status.UID = string(unstructuredRes.GetUID())
-		status.CreatedAt = unstructuredRes.GetCreationTimestamp().Time
+		var health Health
 
 		// Extract status if available
 		if unstructuredStatus, found, _ := unstructured.NestedMap(unstructuredRes.Object, "status"); found {
 			if conditions, ok := unstructuredStatus["conditions"].([]interface{}); ok && len(conditions) > 0 {
 				lastCondition := conditions[len(conditions)-1].(map[string]interface{})
-				status.Health = Health{}
 				if value, ok := lastCondition["status"]; ok {
-					status.Health.Status = value.(string)
+					health.Status = value.(string)
 				}
 				if value, ok := lastCondition["type"]; ok {
-					status.Health.Type = value.(string)
+					health.Type = value.(string)
 				}
 				if value, ok := lastCondition["reason"]; ok {
-					status.Health.Reason = value.(string)
+					health.Reason = value.(string)
 				}
 				if value, ok := lastCondition["message"]; ok {
-					status.Health.Message = value.(string)
+					health.Message = value.(string)
 				}
 			}
 		}
-		resource := Resource{
-			APIVersion: managedResource.ApiVersion,
-			Resource:   managedResource.Resource,
-			Name:       managedResource.Name,
-			Namespace:  managedResource.Namespace,
-			Status:     status,
-			ParentRefs: []watcher.Reference{
-				compositionReference,
-			},
-		}
-		result = append(result, resource)
+
+		resourceNodeJsonSpec := ResourceNode{}
+		resourceNodeJsonSpec.APIVersion = managedResource.ApiVersion
+		resourceNodeJsonSpec.Resource = managedResource.Resource
+		resourceNodeJsonSpec.Name = managedResource.Name
+		resourceNodeJsonSpec.Namespace = managedResource.Namespace
+		resourceNodeJsonSpec.ParentRefs = []watcher.Reference{compositionReference}
+		resourceTreeJson.Spec.Tree = append(resourceTreeJson.Spec.Tree, resourceNodeJsonSpec)
+
+		resourceNodeJsonStatus := ResourceNodeStatus{}
+		time := unstructuredRes.GetCreationTimestamp()
+		resourceNodeJsonStatus.CreatedAt = &time
+		resourceNodeJsonStatus.Kind = unstructuredRes.GetKind()
+		resourceNodeJsonStatus.Name = managedResource.Name
+		resourceNodeJsonStatus.Namespace = managedResource.Namespace
+		resourceNodeJsonStatus.Health = &health
+		uidString := string(unstructuredRes.GetUID())
+		resourceNodeJsonStatus.UID = &uidString
+		resourceVersionString := unstructuredRes.GetResourceVersion()
+		resourceNodeJsonStatus.ResourceVersion = &resourceVersionString
+		resourceNodeJsonStatus.Version = unstructuredRes.GetAPIVersion()
+		resourceNodeJsonStatus.Kind = unstructuredRes.GetKind()
+		resourceNodeJsonStatus.Name = managedResource.Name
+		resourceNodeJsonStatus.Namespace = managedResource.Resource
+		resourceNodeJsonStatus.ParentRefs = []*ResourceNodeStatus{}
+
+		resourceTreeJson.Spec.Tree = append(resourceTreeJson.Spec.Tree, resourceNodeJsonSpec)
+		resourceTreeJson.Status = append(resourceTreeJson.Status, &resourceNodeJsonStatus)
 	}
 
 	resourceTree := ResourceTree{
 		CompositionId: string(obj.GetUID()),
-		Resources:     result,
+		Resources:     resourceTreeJson,
 	}
 
 	jsonData, err := json.Marshal(resourceTree)
@@ -133,32 +148,4 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 	}
 	logger.V(1).Info("webservice response", "json", string(jsonData))
 	return jsonData, nil
-}
-
-type ResourceTree struct {
-	CompositionId string     `json:"compositionId"`
-	Resources     []Resource `json:"resources"`
-}
-
-type Resource struct {
-	APIVersion string              `json:"apiVersion"`
-	Resource   string              `json:"resource"`
-	Name       string              `json:"name"`
-	Namespace  string              `json:"namespace,omitempty"`
-	ParentRefs []watcher.Reference `json:"parentRefs,omitempty"`
-	Status     Status              `json:"status,omitempty"`
-}
-
-type Status struct {
-	CreatedAt       time.Time `json:"createdAt"`
-	ResourceVersion string    `json:"resourceVersion"`
-	UID             string    `json:"uid"`
-	Health          Health    `json:"health,omitempty"`
-}
-
-type Health struct {
-	Status  string `json:"status,omitempty"`
-	Type    string `json:"type,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Message string `json:"message,omitempty"`
 }
