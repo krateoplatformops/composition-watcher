@@ -50,10 +50,6 @@ const (
 	errNotCompositionReference = "managed resource is not a composition reference custom resource"
 )
 
-var (
-	sinceLastUpdate = make(map[string]time.Time)
-)
-
 //+kubebuilder:rbac:groups=*,resources=*,verbs=get;list;watch
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=resourcetrees.krateo.io,resources=compositionreferences/status,verbs=get;update;patch
@@ -112,6 +108,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (reconcile
 		cfg:                 cfg,
 		dynClient:           dynClient,
 		compositionInformer: c.compositionInformer,
+		sinceLastUpdate:     make(map[string]time.Time),
 		pollInterval:        c.pollInterval,
 		log:                 c.log,
 		rec:                 c.recorder,
@@ -122,6 +119,7 @@ type external struct {
 	cfg                 *rest.Config
 	compositionInformer *informerHelper.CompositionInformer
 	dynClient           *dynamic.DynamicClient
+	sinceLastUpdate     map[string]time.Time
 	pollInterval        time.Duration
 	log                 logging.Logger
 	rec                 record.EventRecorder
@@ -144,13 +142,12 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 
 	uid := obj.GetUID()
 	if !e.compositionInformer.DoesInformerAlreadyExist(uid) {
-		cr.SetConditions(prv1.Creating())
 		return reconciler.ExternalObservation{
 			ResourceExists: false,
 		}, nil
 	}
 
-	timeSinceLastUpdate, ok := sinceLastUpdate[cr.Name+cr.Namespace]
+	timeSinceLastUpdate, ok := e.sinceLastUpdate[cr.Name+cr.Namespace]
 	if !ok {
 		return reconciler.ExternalObservation{
 			ResourceExists:   true,
@@ -164,6 +161,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 			}, nil
 		}
 	}
+	cr.SetConditions(prv1.Available())
 	return reconciler.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: true,
@@ -177,6 +175,8 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) error {
 		return errors.New(errNotCompositionReference)
 	}
 
+	cr.SetConditions(prv1.Creating())
+
 	obj, err := e.getObj(ctx, cr)
 	if err != nil {
 		return err
@@ -187,7 +187,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) error {
 	if err = e.compositionInformer.StartCompositionInformer(*cr, uid, e.cfg); err != nil {
 		return err
 	}
-	cr.SetConditions(prv1.Available())
+
 	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed create", "UID '%s'", uid)
 
 	return nil
@@ -216,9 +216,8 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) error {
 		return fmt.Errorf("error with requested http resource: %w", err)
 	}
 
-	cr.SetConditions(prv1.Available())
 	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed updated", "UID '%s'", uid)
-	sinceLastUpdate[cr.Name+cr.Namespace] = time.Now()
+	e.sinceLastUpdate[cr.Name+cr.Namespace] = time.Now()
 	return nil
 }
 
@@ -256,7 +255,7 @@ func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
 		e.log.Info("Could not delete informer for composotion", "uid", deletedUID)
 	}
 
-	delete(sinceLastUpdate, cr.Name+cr.Namespace)
+	delete(e.sinceLastUpdate, cr.Name+cr.Namespace)
 
 	e.log.Debug("Deleted cache on webservice", "delete UID", deletedUID)
 	e.rec.Eventf(cr, corev1.EventTypeNormal, "Deleted from cache", "UID '%s'", deletedUID)
