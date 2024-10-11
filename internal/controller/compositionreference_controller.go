@@ -127,13 +127,6 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 		return reconciler.ExternalObservation{}, errors.New(errNotCompositionReference)
 	}
 
-	// if meta.WasDeleted(cr) {
-	// 	return reconciler.ExternalObservation{
-	// 		ResourceExists:   true,
-	// 		ResourceUpToDate: true,
-	// 	}, nil
-	// }
-
 	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
 	if err != nil {
 		return reconciler.ExternalObservation{}, fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
@@ -151,27 +144,15 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 
 	uid := obj.GetUID()
 	if !e.compositionInformer.DoesInformerAlreadyExist(uid) {
+		cr.SetConditions(prv1.Creating())
 		return reconciler.ExternalObservation{
 			ResourceExists: false,
 		}, nil
 	}
 
-	updatedData, err := statusGetter.GetCompositionResourcesStatus(e.dynClient, obj, cr.Spec.Reference, cr.Spec.Filters.Exclude, e.log)
-	if err != nil {
-		return reconciler.ExternalObservation{}, fmt.Errorf("error retrieving updated status information for resources of composition uid %s: %w", uid, err)
-	}
-
-	err = httpHelper.Request("POST", fmt.Sprintf("/compositions/%s", uid), updatedData)
-	if err != nil {
-		return reconciler.ExternalObservation{}, fmt.Errorf("error with requested http resource: %w", err)
-	}
-
-	cr.SetConditions(prv1.Available())
-	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed", "UID '%s'", uid)
-
 	return reconciler.ExternalObservation{
 		ResourceExists:   true,
-		ResourceUpToDate: true,
+		ResourceUpToDate: false,
 	}, nil
 }
 
@@ -198,11 +179,52 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) error {
 
 	uid := obj.GetUID()
 
-	return e.compositionInformer.StartCompositionInformer(*cr, uid, e.cfg)
+	if err = e.compositionInformer.StartCompositionInformer(*cr, uid, e.cfg); err != nil {
+		return err
+	}
+	cr.SetConditions(prv1.Available())
+	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed create", "UID '%s'", uid)
+
+	return nil
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) error {
-	return nil // NOOP
+	cr, ok := mg.(*watcher.CompositionReference)
+	if !ok {
+		return errors.New(errNotCompositionReference)
+	}
+
+	gv, err := schema.ParseGroupVersion(cr.Spec.Reference.ApiVersion)
+	if err != nil {
+		return fmt.Errorf("unable to parse GroupVersion from composition reference ApiVersion: %w", err)
+	}
+	gvr := schema.GroupVersionResource{
+		Group:    gv.Group,
+		Version:  gv.Version,
+		Resource: cr.Spec.Reference.Resource,
+	}
+	// Get structure to send to webservice
+	obj, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("unable to retrieve composition object: %w", err)
+	}
+
+	uid := obj.GetUID()
+
+	updatedData, err := statusGetter.GetCompositionResourcesStatus(e.dynClient, obj, cr.Spec.Reference, cr.Spec.Filters.Exclude, e.log)
+	if err != nil {
+		return fmt.Errorf("error retrieving updated status information for resources of composition uid %s: %w", uid, err)
+	}
+
+	err = httpHelper.Request("POST", fmt.Sprintf("/compositions/%s", uid), updatedData)
+	if err != nil {
+		return fmt.Errorf("error with requested http resource: %w", err)
+	}
+
+	cr.SetConditions(prv1.Available())
+	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed updated", "UID '%s'", uid)
+
+	return nil
 }
 
 func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
