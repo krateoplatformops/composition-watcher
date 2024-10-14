@@ -8,6 +8,8 @@ metadata:
 spec:
   group: resourcetrees.krateo.io
   names:
+    categories:
+    - krateo
     kind: CompositionReference
     listKind: CompositionReferenceList
     plural: compositionreferences

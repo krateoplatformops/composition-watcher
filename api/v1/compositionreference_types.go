@@ -24,6 +24,7 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,categories={krateo}
 
 type CompositionReference struct {
 	metav1.TypeMeta   `json:",inline"`

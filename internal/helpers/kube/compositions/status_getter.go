@@ -54,6 +54,8 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 		}
 	}
 
+	managedResourceList = append(managedResourceList, compositionReference)
+
 	for _, managedResource := range managedResourceList {
 		skip := false
 		for _, exclude := range excludes {
@@ -120,6 +122,7 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 		time := unstructuredRes.GetCreationTimestamp()
 		resourceNodeJsonStatus.CreatedAt = &time
 		resourceNodeJsonStatus.Kind = unstructuredRes.GetKind()
+		resourceNodeJsonStatus.Version = unstructuredRes.GetAPIVersion()
 		resourceNodeJsonStatus.Name = managedResource.Name
 		resourceNodeJsonStatus.Namespace = managedResource.Namespace
 		resourceNodeJsonStatus.Health = &health
@@ -127,14 +130,30 @@ func GetCompositionResourcesStatus(dynClient *dynamic.DynamicClient, obj *unstru
 		resourceNodeJsonStatus.UID = &uidString
 		resourceVersionString := unstructuredRes.GetResourceVersion()
 		resourceNodeJsonStatus.ResourceVersion = &resourceVersionString
-		resourceNodeJsonStatus.Version = unstructuredRes.GetAPIVersion()
-		resourceNodeJsonStatus.Kind = unstructuredRes.GetKind()
-		resourceNodeJsonStatus.Name = managedResource.Name
-		resourceNodeJsonStatus.Namespace = managedResource.Resource
 		resourceNodeJsonStatus.ParentRefs = []*ResourceNodeStatus{}
 
 		resourceTreeJson.Spec.Tree = append(resourceTreeJson.Spec.Tree, resourceNodeJsonSpec)
 		resourceTreeJson.Status = append(resourceTreeJson.Status, &resourceNodeJsonStatus)
+	}
+
+	compositionStatus := &ResourceNodeStatus{}
+	skipValue := -1
+	// Find the composition in the resourceTreeJson.Status
+	// Copy its pointer and position
+	for i, status := range resourceTreeJson.Status {
+		if obj.GetKind() == status.Kind && obj.GetAPIVersion() == status.Version {
+			skipValue = i
+			compositionStatus = status
+			break
+		}
+	}
+
+	// Add the composition status to each resourceTreeJson.Status, except the one of the composition
+	for i := range resourceTreeJson.Status {
+		if skipValue != i {
+			resourceTreeJson.Status[i].ParentRefs = append(resourceTreeJson.Status[i].ParentRefs, compositionStatus)
+		}
+
 	}
 
 	resourceTree := ResourceTree{
