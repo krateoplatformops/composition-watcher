@@ -154,6 +154,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 			ResourceUpToDate: false,
 		}, nil
 	} else {
+		cr.SetConditions(prv1.Available())
 		if time.Since(timeSinceLastUpdate) > e.pollInterval {
 			return reconciler.ExternalObservation{
 				ResourceExists:   true,
@@ -161,6 +162,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (reconciler
 			}, nil
 		}
 	}
+
 	cr.SetConditions(prv1.Available())
 	return reconciler.ExternalObservation{
 		ResourceExists:   true,
@@ -216,7 +218,7 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) error {
 		return fmt.Errorf("error with requested http resource: %w", err)
 	}
 
-	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed updated", "UID '%s'", uid)
+	e.rec.Eventf(cr, corev1.EventTypeNormal, "Completed update", "UID '%s'", uid)
 	e.sinceLastUpdate[cr.Name+cr.Namespace] = time.Now()
 	return nil
 }
