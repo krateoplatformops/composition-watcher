@@ -274,5 +274,9 @@ func (e *external) getObj(ctx context.Context, cr *watcher.CompositionReference)
 		Resource: cr.Spec.Reference.Resource,
 	}
 	// Get structure to send to webservice
-	return e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
+	res, err := e.dynClient.Resource(gvr).Namespace(cr.Spec.Reference.Namespace).Get(ctx, cr.Spec.Reference.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve resource %s with name %s in namespace %s, with apiVersion %s: %w", cr.Spec.Reference.Resource, cr.Spec.Reference.Name, cr.Spec.Reference.Namespace, cr.Spec.Reference.ApiVersion, err)
+	}
+	return res, nil
 }
