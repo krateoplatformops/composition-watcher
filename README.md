@@ -1,6 +1,6 @@
 # Composition Watcher
 
-This controller uses the CompositionReference Custom Resource Definition to instantiate informers that continuosly monitor composition resources. For each type of event, the respective request is forwarded to the webservice [Resource Tree Handler](https://github.com/krateoplatformops/resource-tree-handler) to generate and cache the resource tree.
+This controller uses the CompositionReference Custom Resource Definition to instantiate informers that continuosly monitor composition resources. For each type of event, the respective request is forwarded to the webservice [Resource Tree Handler](https://github.com/krateoplatformops/resource-tree-handler-alpha) to generate and cache the resource tree.
 
 
 ## Summary
@@ -12,7 +12,7 @@ This controller uses the CompositionReference Custom Resource Definition to inst
 
 ## Overview
 
-When creating a CompositionReference Custom Resource, the controller will start the life cycle of the informer and monitor the cluster for create/delete/update events and notify the [Resource Tree Handler](https://github.com/krateoplatformops/resource-tree-handler).
+When creating a CompositionReference Custom Resource, the controller will start the life cycle of the informer and monitor the cluster for create/delete/update events and notify the [Resource Tree Handler](https://github.com/krateoplatformops/resource-tree-handler-alpha).
 
 ## Architecture
 
